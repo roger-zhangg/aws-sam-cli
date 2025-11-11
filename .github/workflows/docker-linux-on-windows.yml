@@ -1,0 +1,199 @@
+name: Docker Linux on Windows
+
+on:
+  push:
+    branches: [ master, windows_test ]
+  workflow_dispatch:  # Allow manual triggering
+
+jobs:
+  run-linux-docker-on-windows:
+    runs-on: windows-latest
+    
+    steps:
+      # Step 1: Checkout the repository
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      # Step 2: Display system information
+      - name: Display system information
+        run: |
+          echo "Operating System:"
+          systeminfo | findstr /B /C:"OS Name" /C:"OS Version"
+          echo ""
+          echo "Docker version:"
+          docker --version
+          echo ""
+          echo "Docker info:"
+          docker info
+        shell: cmd
+      
+      # Step 3: Pull a Linux Docker image (Ubuntu)
+      - name: Pull Linux Docker image
+        run: docker pull ubuntu:22.04
+        shell: cmd
+      
+      # Step 4: Verify the image was pulled
+      - name: List Docker images
+        run: docker images
+        shell: cmd
+      
+      # Step 5: Run a simple command in the Linux container
+      - name: Run Linux container with basic command
+        run: docker run --rm ubuntu:22.04 /bin/bash -c "echo 'Hello from Ubuntu Linux container running on Windows!'; uname -a; cat /etc/os-release"
+        shell: cmd
+      
+      # Step 6: Run a more complex Linux container with multiple commands
+      - name: Run Linux container with multiple commands
+        run: |
+          docker run --rm ubuntu:22.04 /bin/bash -c "
+            echo '=== System Information ===' &&
+            uname -a &&
+            echo '' &&
+            echo '=== Linux Distribution ===' &&
+            cat /etc/os-release &&
+            echo '' &&
+            echo '=== CPU Information ===' &&
+            cat /proc/cpuinfo | grep 'model name' | head -1 &&
+            echo '' &&
+            echo '=== Memory Information ===' &&
+            free -h 2>/dev/null || echo 'free command not available' &&
+            echo '' &&
+            echo '=== Disk Space ===' &&
+            df -h / &&
+            echo '' &&
+            echo '=== Current Date and Time ===' &&
+            date &&
+            echo '' &&
+            echo '=== Environment Variables ===' &&
+            printenv | grep -E '^(HOME|PATH|USER|SHELL)' | sort
+          "
+        shell: cmd
+      
+      # Step 7: Run Alpine Linux container (smaller image)
+      - name: Pull and run Alpine Linux container
+        run: |
+          docker pull alpine:latest
+          docker run --rm alpine:latest /bin/sh -c "echo 'Hello from Alpine Linux!'; cat /etc/alpine-release; apk --version"
+        shell: cmd
+      
+      # Step 8: Run a Python container
+      - name: Pull and run Python container
+        run: |
+          docker pull python:3.11-slim
+          docker run --rm python:3.11-slim python -c "import sys; import platform; print(f'Python {sys.version}'); print(f'Platform: {platform.platform()}'); print(f'Architecture: {platform.machine()}')"
+        shell: cmd
+      
+      # Step 9: Run container with volume mount (if repository has files to process)
+      - name: Run container with volume mount
+        run: |
+          docker run --rm -v "%cd%":/workspace -w /workspace ubuntu:22.04 /bin/bash -c "
+            echo 'Files in workspace:' &&
+            ls -la | head -10 &&
+            echo '' &&
+            echo 'Total number of files:' &&
+            find . -type f | wc -l
+          "
+        shell: cmd
+      
+      # Step 10: Run container with environment variables
+      - name: Run container with environment variables
+        run: |
+          docker run --rm ^
+            -e MY_VAR="Hello from Windows host" ^
+            -e BUILD_NUMBER="${{ github.run_number }}" ^
+            -e GITHUB_REPO="${{ github.repository }}" ^
+            ubuntu:22.04 /bin/bash -c "
+              echo 'Environment variables passed from host:' &&
+              echo \"MY_VAR: $MY_VAR\" &&
+              echo \"BUILD_NUMBER: $BUILD_NUMBER\" &&
+              echo \"GITHUB_REPO: $GITHUB_REPO\"
+            "
+        shell: cmd
+      
+      # Step 11: Build and run a custom Docker image
+      - name: Create Dockerfile
+        run: |
+          echo FROM ubuntu:22.04 > Dockerfile.linux
+          echo RUN apt-get update ^&^& apt-get install -y curl wget git ^&^& rm -rf /var/lib/apt/lists/* >> Dockerfile.linux
+          echo WORKDIR /app >> Dockerfile.linux
+          echo RUN echo "Custom Linux container built on Windows" ^> /app/message.txt >> Dockerfile.linux
+          echo CMD ["cat", "/app/message.txt"] >> Dockerfile.linux
+        shell: cmd
+      
+      - name: Build custom Docker image
+        run: docker build -f Dockerfile.linux -t custom-linux-image .
+        shell: cmd
+      
+      - name: Run custom Docker image
+        run: docker run --rm custom-linux-image
+        shell: cmd
+      
+      # Step 12: Run a container that performs actual work
+      - name: Run container to process data
+        run: |
+          docker run --rm ubuntu:22.04 /bin/bash -c "
+            echo 'Performing data processing...' &&
+            echo 'Step 1: Creating sample data' &&
+            for i in {1..5}; do echo \"Data line $i: $(date +%s)\" >> /tmp/data.txt; done &&
+            echo 'Step 2: Processing data' &&
+            cat /tmp/data.txt | sort &&
+            echo '' &&
+            echo 'Step 3: Generating summary' &&
+            wc -l /tmp/data.txt &&
+            echo 'Processing complete!'
+          "
+        shell: cmd
+      
+      # Step 13: Network test from container
+      - name: Test network connectivity from Linux container
+        run: |
+          docker run --rm ubuntu:22.04 /bin/bash -c "
+            apt-get update > /dev/null 2>&1 &&
+            apt-get install -y curl > /dev/null 2>&1 &&
+            echo 'Testing network connectivity:' &&
+            curl -s -o /dev/null -w 'GitHub.com HTTP Response: %{http_code}\n' https://github.com &&
+            curl -s https://api.github.com/zen | head -1
+          "
+        shell: cmd
+        continue-on-error: true  # Network tests might fail in some environments
+
+  # Additional job showing multi-container workflow
+  multi-container-workflow:
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Run Redis container
+        run: |
+          docker run -d --name redis-server -p 6379:6379 redis:alpine
+          timeout /t 5 /nobreak > nul
+          docker ps
+        shell: cmd
+      
+      - name: Test Redis connection
+        run: |
+          docker run --rm --link redis-server:redis redis:alpine redis-cli -h redis ping
+        shell: cmd
+      
+      - name: Run PostgreSQL container
+        run: |
+          docker run -d --name postgres-server -e POSTGRES_PASSWORD=mysecretpassword -p 5432:5432 postgres:alpine
+          timeout /t 10 /nobreak > nul
+          docker ps
+        shell: cmd
+      
+      - name: Test PostgreSQL connection
+        run: |
+          docker run --rm --link postgres-server:postgres postgres:alpine psql -h postgres -U postgres -c "SELECT version();" || echo "Connection test completed"
+        shell: cmd
+        env:
+          PGPASSWORD: mysecretpassword
+      
+      - name: Cleanup containers
+        if: always()
+        run: |
+          docker stop redis-server postgres-server 2>nul || echo "Containers already stopped"
+          docker rm redis-server postgres-server 2>nul || echo "Containers already removed"
+        shell: cmd
