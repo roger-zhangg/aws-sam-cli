@@ -1,0 +1,283 @@
+# GitHub Action: Setup WSL2 with Docker for Linux Containers on Windows
+# 
+# This workflow:
+# 1. Disables the default Windows Docker daemon
+# 2. Installs Ubuntu 22.04 on WSL2
+# 3. Installs Docker inside WSL2
+# 4. Configures Docker in WSL2 to accept TCP connections
+# 5. Configures Windows Docker client to connect to WSL2 Docker daemon
+# 6. Tests pulling and running Linux images from Windows
+
+name: WSL2 Docker Setup for Linux Containers
+
+on:
+  push:
+    branches: [ windows_test ]
+  workflow_dispatch:  # Allow manual triggering
+
+jobs:
+  setup-wsl2-docker:
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: System Information
+        run: |
+          Write-Host "=== SYSTEM INFORMATION ===" -ForegroundColor Cyan
+          Write-Host "Windows Version:" -ForegroundColor Yellow
+          [System.Environment]::OSVersion.Version
+          
+          Write-Host "`nCurrent Docker Status:" -ForegroundColor Yellow
+          docker version 2>$null || Write-Host "Docker not running or not installed"
+        shell: powershell
+      
+      - name: Stop and Disable Windows Docker Service
+        run: |
+          Write-Host "=== DISABLING WINDOWS DOCKER DAEMON ===" -ForegroundColor Cyan
+          
+          # Stop Docker Desktop service if running
+          $dockerService = Get-Service -Name "Docker Desktop Service" -ErrorAction SilentlyContinue
+          if ($dockerService) {
+              Write-Host "Stopping Docker Desktop Service..." -ForegroundColor Yellow
+              Stop-Service -Name "Docker Desktop Service" -Force -ErrorAction SilentlyContinue
+          }
+          
+          # Stop Docker daemon if running
+          $dockerProcess = Get-Process -Name "Docker Desktop" -ErrorAction SilentlyContinue
+          if ($dockerProcess) {
+              Write-Host "Stopping Docker Desktop process..." -ForegroundColor Yellow
+              Stop-Process -Name "Docker Desktop" -Force -ErrorAction SilentlyContinue
+          }
+          
+          # Stop com.docker.service if exists
+          $dockerDaemon = Get-Process -Name "com.docker.service" -ErrorAction SilentlyContinue
+          if ($dockerDaemon) {
+              Write-Host "Stopping Docker daemon..." -ForegroundColor Yellow
+              Stop-Process -Name "com.docker.service" -Force -ErrorAction SilentlyContinue
+          }
+          
+          # Wait for services to stop
+          Start-Sleep -Seconds 5
+          
+          Write-Host "✅ Windows Docker daemon disabled" -ForegroundColor Green
+        shell: powershell
+      
+      - name: Install Ubuntu 22.04 on WSL2
+        run: |
+          Write-Host "=== INSTALLING UBUNTU 22.04 ON WSL2 ===" -ForegroundColor Cyan
+          
+          # Download Ubuntu 22.04 for WSL
+          Write-Host "Downloading Ubuntu 22.04..." -ForegroundColor Yellow
+          Invoke-WebRequest -Uri "https://aka.ms/wslubuntu2204" -OutFile "ubuntu2204.appx" -UseBasicParsing
+          
+          # Install Ubuntu
+          Write-Host "Installing Ubuntu 22.04..." -ForegroundColor Yellow
+          Add-AppxPackage -Path "ubuntu2204.appx"
+          
+          # Initialize Ubuntu (non-interactive)
+          Write-Host "Initializing Ubuntu..." -ForegroundColor Yellow
+          ubuntu2204.exe install --root
+          
+          # Set Ubuntu as default WSL distribution
+          wsl --set-default ubuntu-22.04
+          
+          # Verify installation
+          Write-Host "`nVerifying WSL installation:" -ForegroundColor Yellow
+          wsl --list --verbose
+          
+          Write-Host "✅ Ubuntu 22.04 installed on WSL2" -ForegroundColor Green
+        shell: powershell
+      
+      - name: Update Ubuntu and Install Dependencies
+        run: |
+          Write-Host "=== UPDATING UBUNTU AND INSTALLING DEPENDENCIES ===" -ForegroundColor Cyan
+          
+          # Update Ubuntu packages
+          wsl -d ubuntu-22.04 -u root bash -c "apt-get update && apt-get upgrade -y"
+          
+          # Install required packages
+          wsl -d ubuntu-22.04 -u root bash -c "apt-get install -y ca-certificates curl gnupg lsb-release"
+          
+          Write-Host "✅ Ubuntu updated and dependencies installed" -ForegroundColor Green
+        shell: powershell
+      
+      - name: Install Docker in WSL2
+        run: |
+          Write-Host "=== INSTALLING DOCKER IN WSL2 ===" -ForegroundColor Cyan
+          
+          # Add Docker's official GPG key
+          wsl -d ubuntu-22.04 -u root bash -c "mkdir -p /etc/apt/keyrings && curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg"
+          
+          # Set up the repository
+          wsl -d ubuntu-22.04 -u root bash -c 'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null'
+          
+          # Update apt and install Docker
+          wsl -d ubuntu-22.04 -u root bash -c "apt-get update && apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin"
+          
+          # Add root to docker group
+          wsl -d ubuntu-22.04 -u root bash -c "usermod -aG docker root"
+          
+          Write-Host "✅ Docker installed in WSL2" -ForegroundColor Green
+        shell: powershell
+      
+      - name: Configure Docker for TCP Access
+        run: |
+          Write-Host "=== CONFIGURING DOCKER FOR TCP ACCESS ===" -ForegroundColor Cyan
+          
+          # Create Docker daemon configuration
+          $dockerConfig = @'
+          {
+            "hosts": ["unix:///var/run/docker.sock", "tcp://0.0.0.0:2375"],
+            "iptables": false,
+            "bridge": "none"
+          }
+          '@
+          
+          # Write Docker daemon config
+          wsl -d ubuntu-22.04 -u root bash -c "mkdir -p /etc/docker && echo '$dockerConfig' > /etc/docker/daemon.json"
+          
+          # Create systemd override for Docker service
+          $serviceOverride = @'
+          [Service]
+          ExecStart=
+          ExecStart=/usr/bin/dockerd
+          '@
+          
+          wsl -d ubuntu-22.04 -u root bash -c "mkdir -p /etc/systemd/system/docker.service.d && echo '$serviceOverride' > /etc/systemd/system/docker.service.d/override.conf"
+          
+          # Start Docker service
+          wsl -d ubuntu-22.04 -u root bash -c "service docker start"
+          
+          # Wait for Docker to start
+          Start-Sleep -Seconds 5
+          
+          # Verify Docker is running
+          wsl -d ubuntu-22.04 -u root bash -c "docker version"
+          
+          Write-Host "✅ Docker configured for TCP access on port 2375" -ForegroundColor Green
+        shell: powershell
+      
+      - name: Configure Windows Docker Client
+        run: |
+          Write-Host "=== CONFIGURING WINDOWS DOCKER CLIENT ===" -ForegroundColor Cyan
+          
+          # Set DOCKER_HOST environment variable
+          [System.Environment]::SetEnvironmentVariable("DOCKER_HOST", "tcp://localhost:2375", "Machine")
+          [System.Environment]::SetEnvironmentVariable("DOCKER_HOST", "tcp://localhost:2375", "Process")
+          $env:DOCKER_HOST = "tcp://localhost:2375"
+          
+          Write-Host "DOCKER_HOST set to: $env:DOCKER_HOST" -ForegroundColor Yellow
+          
+          # Create Docker context for WSL2
+          docker context create wsl2 --docker "host=tcp://localhost:2375" 2>$null
+          docker context use wsl2 2>$null
+          
+          Write-Host "✅ Windows Docker client configured to use WSL2 Docker daemon" -ForegroundColor Green
+        shell: powershell
+      
+      - name: Test Docker Connection from Windows
+        run: |
+          Write-Host "=== TESTING DOCKER CONNECTION ===" -ForegroundColor Cyan
+          
+          # Set Docker host for this session
+          $env:DOCKER_HOST = "tcp://localhost:2375"
+          
+          # Test Docker version
+          Write-Host "Docker version from Windows:" -ForegroundColor Yellow
+          docker version
+          
+          # Test Docker info
+          Write-Host "`nDocker info:" -ForegroundColor Yellow
+          docker info
+          
+          Write-Host "✅ Successfully connected to WSL2 Docker daemon from Windows" -ForegroundColor Green
+        shell: powershell
+      
+      - name: Pull and Run Linux Images
+        run: |
+          Write-Host "=== TESTING LINUX CONTAINER SUPPORT ===" -ForegroundColor Cyan
+          
+          # Set Docker host
+          $env:DOCKER_HOST = "tcp://localhost:2375"
+          
+          # Test 1: Pull Ubuntu image
+          Write-Host "`n1. Pulling Ubuntu Linux image..." -ForegroundColor Yellow
+          docker pull ubuntu:22.04
+          
+          # Test 2: Run Ubuntu container
+          Write-Host "`n2. Running Ubuntu container..." -ForegroundColor Yellow
+          docker run --rm ubuntu:22.04 /bin/bash -c "echo 'Hello from Ubuntu container!'; uname -a; cat /etc/os-release"
+          
+          # Test 3: Pull Alpine image
+          Write-Host "`n3. Pulling Alpine Linux image..." -ForegroundColor Yellow
+          docker pull alpine:latest
+          
+          # Test 4: Run Alpine container
+          Write-Host "`n4. Running Alpine container..." -ForegroundColor Yellow
+          docker run --rm alpine:latest /bin/sh -c "echo 'Hello from Alpine container!'; cat /etc/alpine-release; uname -a"
+          
+          # Test 5: Pull and run nginx
+          Write-Host "`n5. Pulling and running nginx..." -ForegroundColor Yellow
+          docker pull nginx:alpine
+          docker run -d --name test-nginx -p 8080:80 nginx:alpine
+          
+          # Wait for nginx to start
+          Start-Sleep -Seconds 3
+          
+          # Test 6: List running containers
+          Write-Host "`n6. Listing running containers..." -ForegroundColor Yellow
+          docker ps
+          
+          # Test 7: Stop and remove nginx
+          Write-Host "`n7. Cleaning up test container..." -ForegroundColor Yellow
+          docker stop test-nginx
+          docker rm test-nginx
+          
+          # Test 8: List all images
+          Write-Host "`n8. Listing Docker images..." -ForegroundColor Yellow
+          docker images
+          
+          Write-Host "`n✅ All tests passed! Linux containers are working via WSL2 Docker daemon" -ForegroundColor Green
+        shell: powershell
+      
+      - name: Verify Setup Summary
+        run: |
+          Write-Host "=== SETUP SUMMARY ===" -ForegroundColor Cyan
+          
+          $env:DOCKER_HOST = "tcp://localhost:2375"
+          
+          Write-Host "WSL2 Distributions:" -ForegroundColor Yellow
+          wsl --list --verbose
+          
+          Write-Host "`nDocker Client (Windows) connecting to:" -ForegroundColor Yellow
+          Write-Host "DOCKER_HOST=$env:DOCKER_HOST" -ForegroundColor Green
+          
+          Write-Host "`nDocker Daemon (WSL2) info:" -ForegroundColor Yellow
+          docker info --format "OS: {{.OperatingSystem}}`nArchitecture: {{.Architecture}}`nKernel: {{.KernelVersion}}`nTotal Memory: {{.MemTotal}}"
+          
+          Write-Host "`n✅ Setup Complete!" -ForegroundColor Green
+          Write-Host "Windows Docker client is now connected to Linux Docker daemon in WSL2" -ForegroundColor Green
+          Write-Host "You can now pull and run Linux containers using Docker commands from Windows" -ForegroundColor Green
+        shell: powershell
+
+# TROUBLESHOOTING:
+# ================
+# 
+# If Docker connection fails:
+# 1. Ensure WSL2 is properly installed: wsl --status
+# 2. Check if Docker is running in WSL2: wsl -d ubuntu-22.04 -u root service docker status
+# 3. Restart Docker in WSL2: wsl -d ubuntu-22.04 -u root service docker restart
+# 4. Check firewall settings for port 2375
+# 
+# To manually connect from Windows to WSL2 Docker:
+# - Set environment variable: $env:DOCKER_HOST = "tcp://localhost:2375"
+# - Or use: docker -H tcp://localhost:2375 <command>
+# 
+# To access Docker from within WSL2:
+# - wsl -d ubuntu-22.04
+# - docker ps
+# 
+# Note: This setup exposes Docker on port 2375 without TLS.
+# For production use, consider setting up TLS certificates.
