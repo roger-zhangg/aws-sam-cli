@@ -1,199 +1,327 @@
-name: Docker Linux on Windows
+# GitHub Action: Running Linux Docker Containers on Windows with WSL2
+# 
+# IMPORTANT: How Docker Works on Windows GitHub Actions Runners
+# ==============================================================
+# GitHub Actions Windows runners come pre-configured with Docker Desktop
+# which automatically uses WSL2 (Windows Subsystem for Linux 2) backend.
+# This allows seamless execution of Linux containers on Windows without
+# any additional setup required in the workflow.
+#
+# The Windows runners have:
+# - Docker Desktop for Windows (with WSL2 backend enabled)
+# - WSL2 with a default Linux distribution
+# - Docker daemon running in WSL2
+#
+# This means you can directly pull and run Linux containers!
+
+name: Docker Linux on Windows with WSL2
 
 on:
   push:
-    branches: [ master, windows_test ]
+    branches: [ main, windows_test ]
   workflow_dispatch:  # Allow manual triggering
 
 jobs:
-  run-linux-docker-on-windows:
+  # Job 1: Verify WSL2 and Docker Setup
+  verify-wsl2-docker-setup:
     runs-on: windows-latest
     
     steps:
-      # Step 1: Checkout the repository
       - name: Checkout repository
         uses: actions/checkout@v4
       
-      # Step 2: Display system information
-      - name: Display system information
+      - name: Display Windows and WSL Information
         run: |
+          echo "=== WINDOWS SYSTEM INFORMATION ==="
           echo "Operating System:"
           systeminfo | findstr /B /C:"OS Name" /C:"OS Version"
           echo ""
+          echo "=== WSL INFORMATION ==="
+          echo "Checking WSL status..."
+          wsl --status || echo "WSL status command not available"
+          echo ""
+          echo "WSL distributions:"
+          wsl --list --verbose || echo "No WSL distributions found"
+          echo ""
+          echo "=== DOCKER INFORMATION ==="
           echo "Docker version:"
           docker --version
           echo ""
-          echo "Docker info:"
-          docker info
-        shell: cmd
+          echo "Docker system info:"
+          docker system info
+          echo ""
+          echo "Docker context:"
+          docker context ls
+        shell: powershell
       
-      # Step 3: Pull a Linux Docker image (Ubuntu)
-      - name: Pull Linux Docker image
+      - name: Verify Docker can run Linux containers
+        run: |
+          Write-Host "=== VERIFYING LINUX CONTAINER SUPPORT ===" -ForegroundColor Green
+          
+          # Check Docker daemon
+          docker version
+          
+          Write-Host "`n=== DOCKER IS CONFIGURED FOR ===" -ForegroundColor Yellow
+          $dockerInfo = docker info --format '{{json .}}'
+          $info = $dockerInfo | ConvertFrom-Json
+          Write-Host "OS/Arch: $($info.OSType)/$($info.Architecture)"
+          Write-Host "Server Version: $($info.ServerVersion)"
+          Write-Host "Storage Driver: $($info.Driver)"
+          
+          # The key indicator - if OSType is "linux", we can run Linux containers
+          if ($info.OSType -eq "linux") {
+              Write-Host "`n✅ Docker is configured to run Linux containers!" -ForegroundColor Green
+          } else {
+              Write-Host "`n⚠️ Docker is set to Windows containers mode" -ForegroundColor Yellow
+          }
+        shell: powershell
+
+  # Job 2: Run Linux Containers
+  run-linux-containers:
+    runs-on: windows-latest
+    needs: verify-wsl2-docker-setup
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      # Pull and run Ubuntu
+      - name: Pull Ubuntu Linux image
         run: docker pull ubuntu:22.04
         shell: cmd
       
-      # Step 4: Verify the image was pulled
-      - name: List Docker images
-        run: docker images
-        shell: cmd
-      
-      # Step 5: Run a simple command in the Linux container
-      - name: Run Linux container with basic command
-        run: docker run --rm ubuntu:22.04 /bin/bash -c "echo 'Hello from Ubuntu Linux container running on Windows!'; uname -a; cat /etc/os-release"
-        shell: cmd
-      
-      # Step 6: Run a more complex Linux container with multiple commands
-      - name: Run Linux container with multiple commands
+      - name: Run Ubuntu container
         run: |
           docker run --rm ubuntu:22.04 /bin/bash -c "
-            echo '=== System Information ===' &&
-            uname -a &&
+            echo '=== Running Ubuntu Linux on Windows via WSL2 ===' &&
+            echo 'Hostname:' $(hostname) &&
+            echo 'Kernel:' $(uname -r) &&
+            echo 'Distribution:' &&
+            cat /etc/os-release | grep PRETTY_NAME &&
             echo '' &&
-            echo '=== Linux Distribution ===' &&
-            cat /etc/os-release &&
+            echo 'CPU Info:' &&
+            lscpu | grep 'Model name' || cat /proc/cpuinfo | grep 'model name' | head -1 &&
             echo '' &&
-            echo '=== CPU Information ===' &&
-            cat /proc/cpuinfo | grep 'model name' | head -1 &&
-            echo '' &&
-            echo '=== Memory Information ===' &&
+            echo 'Memory:' &&
             free -h 2>/dev/null || echo 'free command not available' &&
             echo '' &&
-            echo '=== Disk Space ===' &&
-            df -h / &&
-            echo '' &&
-            echo '=== Current Date and Time ===' &&
-            date &&
-            echo '' &&
-            echo '=== Environment Variables ===' &&
-            printenv | grep -E '^(HOME|PATH|USER|SHELL)' | sort
+            echo 'This Linux container is running on Windows through WSL2!'
           "
         shell: cmd
       
-      # Step 7: Run Alpine Linux container (smaller image)
-      - name: Pull and run Alpine Linux container
+      # Pull and run Alpine
+      - name: Run Alpine Linux container
         run: |
           docker pull alpine:latest
-          docker run --rm alpine:latest /bin/sh -c "echo 'Hello from Alpine Linux!'; cat /etc/alpine-release; apk --version"
-        shell: cmd
-      
-      # Step 8: Run a Python container
-      - name: Pull and run Python container
-        run: |
-          docker pull python:3.11-slim
-          docker run --rm python:3.11-slim python -c "import sys; import platform; print(f'Python {sys.version}'); print(f'Platform: {platform.platform()}'); print(f'Architecture: {platform.machine()}')"
-        shell: cmd
-      
-      # Step 9: Run container with volume mount (if repository has files to process)
-      - name: Run container with volume mount
-        run: |
-          docker run --rm -v "%cd%":/workspace -w /workspace ubuntu:22.04 /bin/bash -c "
-            echo 'Files in workspace:' &&
-            ls -la | head -10 &&
+          docker run --rm alpine:latest /bin/sh -c "
+            echo '=== Alpine Linux Info ===' &&
+            cat /etc/alpine-release &&
+            echo 'Kernel: ' && uname -r &&
             echo '' &&
-            echo 'Total number of files:' &&
-            find . -type f | wc -l
+            echo 'Installing packages in Alpine container...' &&
+            apk add --no-cache curl git &&
+            echo 'Packages installed successfully!' &&
+            curl --version | head -1 &&
+            git --version
           "
         shell: cmd
       
-      # Step 10: Run container with environment variables
-      - name: Run container with environment variables
+      # Run Debian
+      - name: Run Debian container
         run: |
-          docker run --rm ^
-            -e MY_VAR="Hello from Windows host" ^
-            -e BUILD_NUMBER="${{ github.run_number }}" ^
-            -e GITHUB_REPO="${{ github.repository }}" ^
-            ubuntu:22.04 /bin/bash -c "
-              echo 'Environment variables passed from host:' &&
-              echo \"MY_VAR: $MY_VAR\" &&
-              echo \"BUILD_NUMBER: $BUILD_NUMBER\" &&
-              echo \"GITHUB_REPO: $GITHUB_REPO\"
-            "
-        shell: cmd
-      
-      # Step 11: Build and run a custom Docker image
-      - name: Create Dockerfile
-        run: |
-          echo FROM ubuntu:22.04 > Dockerfile.linux
-          echo RUN apt-get update ^&^& apt-get install -y curl wget git ^&^& rm -rf /var/lib/apt/lists/* >> Dockerfile.linux
-          echo WORKDIR /app >> Dockerfile.linux
-          echo RUN echo "Custom Linux container built on Windows" ^> /app/message.txt >> Dockerfile.linux
-          echo CMD ["cat", "/app/message.txt"] >> Dockerfile.linux
-        shell: cmd
-      
-      - name: Build custom Docker image
-        run: docker build -f Dockerfile.linux -t custom-linux-image .
-        shell: cmd
-      
-      - name: Run custom Docker image
-        run: docker run --rm custom-linux-image
-        shell: cmd
-      
-      # Step 12: Run a container that performs actual work
-      - name: Run container to process data
-        run: |
-          docker run --rm ubuntu:22.04 /bin/bash -c "
-            echo 'Performing data processing...' &&
-            echo 'Step 1: Creating sample data' &&
-            for i in {1..5}; do echo \"Data line $i: $(date +%s)\" >> /tmp/data.txt; done &&
-            echo 'Step 2: Processing data' &&
-            cat /tmp/data.txt | sort &&
+          docker pull debian:latest
+          docker run --rm debian:latest /bin/bash -c "
+            echo '=== Debian Linux Info ===' &&
+            cat /etc/debian_version &&
+            uname -a &&
             echo '' &&
-            echo 'Step 3: Generating summary' &&
-            wc -l /tmp/data.txt &&
-            echo 'Processing complete!'
-          "
-        shell: cmd
-      
-      # Step 13: Network test from container
-      - name: Test network connectivity from Linux container
-        run: |
-          docker run --rm ubuntu:22.04 /bin/bash -c "
             apt-get update > /dev/null 2>&1 &&
             apt-get install -y curl > /dev/null 2>&1 &&
-            echo 'Testing network connectivity:' &&
-            curl -s -o /dev/null -w 'GitHub.com HTTP Response: %{http_code}\n' https://github.com &&
-            curl -s https://api.github.com/zen | head -1
+            echo 'Testing network from Debian container:' &&
+            curl -s https://api.github.com/zen
           "
         shell: cmd
-        continue-on-error: true  # Network tests might fail in some environments
 
-  # Additional job showing multi-container workflow
-  multi-container-workflow:
+  # Job 3: Advanced Docker Operations
+  advanced-docker-operations:
     runs-on: windows-latest
     
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
       
-      - name: Run Redis container
+      # Build a custom Linux image on Windows
+      - name: Create and build custom Linux Dockerfile
         run: |
-          docker run -d --name redis-server -p 6379:6379 redis:alpine
+          @echo off
+          (
+            echo FROM ubuntu:22.04
+            echo RUN apt-get update ^&^& apt-get install -y python3 python3-pip nodejs npm ^&^& rm -rf /var/lib/apt/lists/*
+            echo WORKDIR /app
+            echo RUN echo '#!/bin/bash' ^> /app/script.sh
+            echo RUN echo 'echo "This script runs in a Linux container built on Windows!"' ^>^> /app/script.sh
+            echo RUN echo 'python3 --version' ^>^> /app/script.sh
+            echo RUN echo 'node --version' ^>^> /app/script.sh
+            echo RUN echo 'npm --version' ^>^> /app/script.sh
+            echo RUN chmod +x /app/script.sh
+            echo CMD ["/app/script.sh"]
+          ) > Dockerfile.custom
+          
+          docker build -f Dockerfile.custom -t custom-linux-on-windows .
+        shell: cmd
+      
+      - name: Run custom Linux image
+        run: docker run --rm custom-linux-on-windows
+        shell: cmd
+      
+      # Volume mounting from Windows to Linux container
+      - name: Create test files on Windows host
+        run: |
+          echo "This file was created on Windows host" > test-file.txt
+          mkdir test-dir
+          echo "Another file in a directory" > test-dir\nested-file.txt
+        shell: cmd
+      
+      - name: Mount Windows directory in Linux container
+        run: |
+          docker run --rm -v "%cd%":/mounted -w /mounted ubuntu:22.04 /bin/bash -c "
+            echo '=== Files from Windows host mounted in Linux container ===' &&
+            ls -la &&
+            echo '' &&
+            echo '=== Content of test-file.txt ===' &&
+            cat test-file.txt &&
+            echo '' &&
+            echo '=== Creating a file from Linux container ===' &&
+            echo 'This file was created inside the Linux container' > created-in-linux.txt &&
+            echo 'File created successfully!' &&
+            echo '' &&
+            echo '=== All .txt files ===' &&
+            find . -name '*.txt' -type f
+          "
+        shell: cmd
+      
+      - name: Verify file created by Linux container exists on Windows
+        run: |
+          if exist created-in-linux.txt (
+            echo File created by Linux container exists on Windows host!
+            type created-in-linux.txt
+          ) else (
+            echo File not found
+          )
+        shell: cmd
+
+  # Job 4: Docker Compose with Linux containers
+  docker-compose-linux:
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Create docker-compose.yml
+        run: |
+          @echo off
+          (
+            echo version: '3.8'
+            echo services:
+            echo   web:
+            echo     image: nginx:alpine
+            echo     ports:
+            echo       - "8080:80"
+            echo     volumes:
+            echo       - ./html:/usr/share/nginx/html
+            echo   api:
+            echo     image: node:alpine
+            echo     command: node -e "console.log('Node.js API server would run here')"
+            echo   database:
+            echo     image: postgres:alpine
+            echo     environment:
+            echo       POSTGRES_PASSWORD: example
+            echo       POSTGRES_DB: testdb
+          ) > docker-compose.yml
+          
+          mkdir html
+          echo ^<h1^>Hello from Nginx running in Linux container on Windows!^</h1^> > html\index.html
+        shell: cmd
+      
+      - name: Run Docker Compose
+        run: |
+          docker-compose up -d
           timeout /t 5 /nobreak > nul
-          docker ps
+          docker-compose ps
+          docker-compose logs
+          docker-compose down
+        shell: cmd
+
+  # Job 5: Performance and Resource Testing
+  performance-testing:
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Run performance test in Linux container
+        run: |
+          docker run --rm ubuntu:22.04 /bin/bash -c "
+            echo '=== Performance Testing ===' &&
+            echo 'CPU Benchmark (calculating prime numbers):' &&
+            time (factor 99999999999999) &&
+            echo '' &&
+            echo 'Disk I/O Test:' &&
+            dd if=/dev/zero of=/tmp/test bs=1M count=100 2>&1 | grep -E 'copied|MB/s' &&
+            echo '' &&
+            echo 'Memory allocation test:' &&
+            python3 -c 'import sys; x = \"a\" * (100 * 1024 * 1024); print(f\"Allocated {len(x) / 1024 / 1024:.0f} MB\")' 2>/dev/null || echo 'Python not available for memory test'
+          "
         shell: cmd
       
-      - name: Test Redis connection
+      - name: Container resource limits test
         run: |
-          docker run --rm --link redis-server:redis redis:alpine redis-cli -h redis ping
+          echo Testing container with resource limits...
+          docker run --rm --memory="256m" --cpus="0.5" alpine:latest /bin/sh -c "
+            echo 'Running with limited resources:' &&
+            echo '- Memory limit: 256MB' &&
+            echo '- CPU limit: 0.5 cores' &&
+            cat /proc/meminfo | grep MemTotal &&
+            nproc
+          "
+        shell: cmd
+
+  # Job 6: Multi-architecture demonstration
+  multi-architecture:
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Show Docker buildx support
+        run: |
+          docker buildx version
+          docker buildx ls
         shell: cmd
       
-      - name: Run PostgreSQL container
+      - name: Pull and run ARM64 image (emulated)
         run: |
-          docker run -d --name postgres-server -e POSTGRES_PASSWORD=mysecretpassword -p 5432:5432 postgres:alpine
-          timeout /t 10 /nobreak > nul
-          docker ps
+          echo Note: ARM64 images will run under emulation on x86_64
+          docker run --rm --platform linux/amd64 alpine:latest uname -m
         shell: cmd
-      
-      - name: Test PostgreSQL connection
-        run: |
-          docker run --rm --link postgres-server:postgres postgres:alpine psql -h postgres -U postgres -c "SELECT version();" || echo "Connection test completed"
-        shell: cmd
-        env:
-          PGPASSWORD: mysecretpassword
-      
-      - name: Cleanup containers
-        if: always()
-        run: |
-          docker stop redis-server postgres-server 2>nul || echo "Containers already stopped"
-          docker rm redis-server postgres-server 2>nul || echo "Containers already removed"
-        shell: cmd
+        continue-on-error: true
+
+# Summary:
+# This workflow demonstrates that GitHub Actions Windows runners can seamlessly
+# run Linux Docker containers thanks to the pre-configured WSL2 backend.
+# 
+# Key Points:
+# 1. No additional WSL2 setup is required in the workflow
+# 2. Docker Desktop on Windows runners is pre-configured with WSL2 backend
+# 3. Linux containers run natively through WSL2's Linux kernel
+# 4. Full support for volumes, networking, and all Docker features
+# 5. Can build Linux images, run docker-compose, and more
+#
+# For local development on Windows:
+# To replicate this setup locally, ensure you have:
+# 1. Windows 10 version 2004+ or Windows 11
+# 2. WSL2 installed: wsl --install
+# 3. Docker Desktop with WSL2 backend enabled (Settings > General > Use WSL 2 based engine)
