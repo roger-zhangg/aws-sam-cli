@@ -30,7 +30,11 @@ jobs:
           [System.Environment]::OSVersion.Version
           
           Write-Host "`nCurrent Docker Status:" -ForegroundColor Yellow
-          docker version 2>$null || Write-Host "Docker not running or not installed"
+          try {
+              docker version
+          } catch {
+              Write-Host "Docker not running or not installed"
+          }
         shell: powershell
       
       - name: Stop and Disable Windows Docker Service
