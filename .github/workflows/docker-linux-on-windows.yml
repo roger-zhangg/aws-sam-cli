@@ -2,17 +2,17 @@
 # 
 # IMPORTANT: How Docker Works on Windows GitHub Actions Runners
 # ==============================================================
-# GitHub Actions Windows runners come pre-configured with Docker Desktop
-# which automatically uses WSL2 (Windows Subsystem for Linux 2) backend.
-# This allows seamless execution of Linux containers on Windows without
-# any additional setup required in the workflow.
+# GitHub Actions Windows runners come pre-configured with Docker Desktop.
+# However, Docker may be in Windows container mode by default, which will
+# cause errors like "no matching manifest for windows/amd64".
 #
-# The Windows runners have:
-# - Docker Desktop for Windows (with WSL2 backend enabled)
-# - WSL2 with a default Linux distribution
-# - Docker daemon running in WSL2
+# This workflow demonstrates how to:
+# 1. Switch Docker to Linux container mode if needed
+# 2. Use WSL2 backend to run Linux containers
+# 3. Handle both scenarios (pre-configured or manual switch)
 #
-# This means you can directly pull and run Linux containers!
+# The error "no matching manifest for windows/amd64" means Docker is trying
+# to pull Windows containers instead of Linux containers.
 
 name: Docker Linux on Windows with WSL2
 
@@ -22,77 +22,101 @@ on:
   workflow_dispatch:  # Allow manual triggering
 
 jobs:
-  # Job 1: Verify WSL2 and Docker Setup
-  verify-wsl2-docker-setup:
+  # Job 1: Setup and Verify Docker for Linux Containers
+  setup-docker-for-linux:
     runs-on: windows-latest
     
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
       
-      - name: Display Windows and WSL Information
+      - name: Check and Switch Docker to Linux Containers
         run: |
-          echo "=== WINDOWS SYSTEM INFORMATION ==="
-          echo "Operating System:"
-          systeminfo | findstr /B /C:"OS Name" /C:"OS Version"
-          echo ""
-          echo "=== WSL INFORMATION ==="
-          echo "Checking WSL status..."
-          wsl --status || echo "WSL status command not available"
-          echo ""
-          echo "WSL distributions:"
-          wsl --list --verbose || echo "No WSL distributions found"
-          echo ""
-          echo "=== DOCKER INFORMATION ==="
-          echo "Docker version:"
-          docker --version
-          echo ""
-          echo "Docker system info:"
-          docker system info
-          echo ""
-          echo "Docker context:"
-          docker context ls
+          Write-Host "=== CHECKING DOCKER CONFIGURATION ===" -ForegroundColor Cyan
+          
+          # Get current Docker mode
+          try {
+              $dockerInfo = docker info --format '{{json .}}' | ConvertFrom-Json
+              Write-Host "Current Docker OS Type: $($dockerInfo.OSType)" -ForegroundColor Yellow
+              
+              if ($dockerInfo.OSType -eq "windows") {
+                  Write-Host "Docker is in Windows container mode. Attempting to switch to Linux containers..." -ForegroundColor Yellow
+                  
+                  # Method 1: Try using DockerCli.exe if available
+                  $dockerCliPath = "C:\Program Files\Docker\Docker\DockerCli.exe"
+                  if (Test-Path $dockerCliPath) {
+                      Write-Host "Found DockerCli.exe, switching to Linux containers..." -ForegroundColor Green
+                      & "$dockerCliPath" -SwitchLinuxEngine
+                      Start-Sleep -Seconds 5
+                  }
+                  
+                  # Method 2: Try using docker context
+                  Write-Host "Creating and using Linux context..." -ForegroundColor Green
+                  docker context create linux-engine --docker "host=npipe:////./pipe/docker_engine_linux" 2>$null
+                  docker context use linux-engine 2>$null
+                  
+                  # Verify the switch
+                  Start-Sleep -Seconds 5
+                  $newInfo = docker info --format '{{json .}}' | ConvertFrom-Json
+                  if ($newInfo.OSType -eq "linux") {
+                      Write-Host "✅ Successfully switched to Linux containers!" -ForegroundColor Green
+                  } else {
+                      Write-Host "⚠️ Could not switch to Linux containers automatically" -ForegroundColor Yellow
+                  }
+              } else {
+                  Write-Host "✅ Docker is already configured for Linux containers!" -ForegroundColor Green
+              }
+          } catch {
+              Write-Host "Error checking Docker configuration: $_" -ForegroundColor Red
+          }
+          
+          # Display final Docker information
+          Write-Host "`n=== FINAL DOCKER CONFIGURATION ===" -ForegroundColor Cyan
+          docker version
+          docker info
         shell: powershell
       
-      - name: Verify Docker can run Linux containers
+      - name: Test Linux Container Pull
         run: |
-          Write-Host "=== VERIFYING LINUX CONTAINER SUPPORT ===" -ForegroundColor Green
+          Write-Host "=== TESTING LINUX CONTAINER PULL ===" -ForegroundColor Cyan
           
-          # Check Docker daemon
-          docker version
+          # Explicitly try to pull a Linux image with platform specification
+          Write-Host "Attempting to pull Linux Ubuntu image with --platform flag..." -ForegroundColor Yellow
           
-          Write-Host "`n=== DOCKER IS CONFIGURED FOR ===" -ForegroundColor Yellow
-          $dockerInfo = docker info --format '{{json .}}'
-          $info = $dockerInfo | ConvertFrom-Json
-          Write-Host "OS/Arch: $($info.OSType)/$($info.Architecture)"
-          Write-Host "Server Version: $($info.ServerVersion)"
-          Write-Host "Storage Driver: $($info.Driver)"
+          # Method 1: Use --platform flag to force Linux
+          docker pull --platform linux/amd64 ubuntu:22.04
           
-          # The key indicator - if OSType is "linux", we can run Linux containers
-          if ($info.OSType -eq "linux") {
-              Write-Host "`n✅ Docker is configured to run Linux containers!" -ForegroundColor Green
+          if ($LASTEXITCODE -eq 0) {
+              Write-Host "✅ Successfully pulled Linux Ubuntu image!" -ForegroundColor Green
+              docker images ubuntu:22.04
           } else {
-              Write-Host "`n⚠️ Docker is set to Windows containers mode" -ForegroundColor Yellow
+              Write-Host "❌ Failed to pull Linux image. Docker may not support Linux containers on this runner." -ForegroundColor Red
+              
+              # Try alternative: Use Docker buildx which supports multi-platform
+              Write-Host "Attempting with Docker buildx..." -ForegroundColor Yellow
+              docker buildx create --use --name mybuilder --driver docker-container --bootstrap
+              docker buildx inspect --bootstrap
           }
         shell: powershell
+        continue-on-error: true
 
-  # Job 2: Run Linux Containers
+  # Job 2: Run Linux Containers with Platform Specification
   run-linux-containers:
     runs-on: windows-latest
-    needs: verify-wsl2-docker-setup
+    needs: setup-docker-for-linux
     
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
       
-      # Pull and run Ubuntu
-      - name: Pull Ubuntu Linux image
-        run: docker pull ubuntu:22.04
+      # Pull and run Ubuntu with explicit platform
+      - name: Pull Ubuntu Linux image with platform flag
+        run: docker pull --platform linux/amd64 ubuntu:22.04
         shell: cmd
       
       - name: Run Ubuntu container
         run: |
-          docker run --rm ubuntu:22.04 /bin/bash -c "
+          docker run --rm --platform linux/amd64 ubuntu:22.04 /bin/bash -c "
             echo '=== Running Ubuntu Linux on Windows via WSL2 ===' &&
             echo 'Hostname:' $(hostname) &&
             echo 'Kernel:' $(uname -r) &&
@@ -109,11 +133,11 @@ jobs:
           "
         shell: cmd
       
-      # Pull and run Alpine
+      # Pull and run Alpine with platform specification
       - name: Run Alpine Linux container
         run: |
-          docker pull alpine:latest
-          docker run --rm alpine:latest /bin/sh -c "
+          docker pull --platform linux/amd64 alpine:latest
+          docker run --rm --platform linux/amd64 alpine:latest /bin/sh -c "
             echo '=== Alpine Linux Info ===' &&
             cat /etc/alpine-release &&
             echo 'Kernel: ' && uname -r &&
@@ -126,11 +150,11 @@ jobs:
           "
         shell: cmd
       
-      # Run Debian
+      # Run Debian with platform specification
       - name: Run Debian container
         run: |
-          docker pull debian:latest
-          docker run --rm debian:latest /bin/bash -c "
+          docker pull --platform linux/amd64 debian:latest
+          docker run --rm --platform linux/amd64 debian:latest /bin/bash -c "
             echo '=== Debian Linux Info ===' &&
             cat /etc/debian_version &&
             uname -a &&
