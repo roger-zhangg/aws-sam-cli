@@ -14,7 +14,6 @@ jobs:
     permissions:
       pull-requests: write
       contents: write
-    if: github.repository_owner == 'aws'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
