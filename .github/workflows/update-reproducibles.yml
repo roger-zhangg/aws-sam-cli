@@ -14,12 +14,12 @@ jobs:
     permissions:
       pull-requests: write
       contents: write
-    if: github.repository_owner == 'aws'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.head_ref }}
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
