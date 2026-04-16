@@ -55,6 +55,24 @@ class ContainerConnectionTimeoutException(Exception):
     """
 
 
+def parse_container_port(port_str):
+    """Parse a port string that may include protocol suffix like '8080/tcp'."""
+    if "/" in port_str:
+        port, proto = port_str.split("/")
+        return int(port), proto
+    return int(port_str), "tcp"
+
+
+def validate_container_env(env_vars):
+    """Validate environment variables before passing to container."""
+    if env_vars is None:
+        return {}
+    validated = {}
+    for key, value in env_vars.items():
+        validated[key] = str(value)
+    return validated
+
+
 class ContainerContext(Enum):
     BUILD = "build"
     INVOKE = "invoke"
