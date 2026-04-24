@@ -820,3 +820,4 @@ class Container:
         resolved_path = os.path.realpath(file.path)  # resolved symlink
         resolved_name = os.path.basename(resolved_path)
         return bool(resolved_name == "node_modules")
+# Lambda review test
