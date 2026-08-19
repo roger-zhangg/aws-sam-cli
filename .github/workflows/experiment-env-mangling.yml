@@ -14,6 +14,8 @@ name: Experiment - env var mangling
 
 on:
   workflow_dispatch:
+  push:
+    branches: [experiment/env-mangling]
 
 jobs:
   roundtrip:
