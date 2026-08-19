@@ -76,6 +76,34 @@ jobs:
           MSYS2_PATH_TYPE: strict
         run: python tests/experiment_env_roundtrip.py --verify --label "${{ matrix.os }}/bash+PATH_TYPE_strict"
 
+      # Side-effect check: PROBE_PATHLIKE is a genuine POSIX path that native tools *want*
+      # converted. Scoped exclusion should leave it converting; '*' should stop it.
+      - name: Side effect - baseline (conversion working as intended)
+        shell: bash
+        env:
+          PROBE_PATHLIKE: /usr/bin
+          PROBE_SECRETLIKE: /bcdefghi0123456789ABCDEFGHIJKLMNOPQRSTU
+        run: |
+          python -c "import os;print('  baseline      PATHLIKE=%r SECRETLIKE=%r'%(os.environ.get('PROBE_PATHLIKE'),os.environ.get('PROBE_SECRETLIKE')))"
+
+      - name: Side effect - scoped exclusion
+        shell: bash
+        env:
+          MSYS2_ENV_CONV_EXCL: 'PROBE_SECRETLIKE'
+          PROBE_PATHLIKE: /usr/bin
+          PROBE_SECRETLIKE: /bcdefghi0123456789ABCDEFGHIJKLMNOPQRSTU
+        run: |
+          python -c "import os;print('  scoped        PATHLIKE=%r SECRETLIKE=%r'%(os.environ.get('PROBE_PATHLIKE'),os.environ.get('PROBE_SECRETLIKE')))"
+
+      - name: Side effect - global exclusion
+        shell: bash
+        env:
+          MSYS2_ENV_CONV_EXCL: '*'
+          PROBE_PATHLIKE: /usr/bin
+          PROBE_SECRETLIKE: /bcdefghi0123456789ABCDEFGHIJKLMNOPQRSTU
+        run: |
+          python -c "import os;print('  global-star   PATHLIKE=%r SECRETLIKE=%r'%(os.environ.get('PROBE_PATHLIKE'),os.environ.get('PROBE_SECRETLIKE')))"
+
       - name: Read back - cmd
         if: runner.os == 'Windows'
         shell: cmd
