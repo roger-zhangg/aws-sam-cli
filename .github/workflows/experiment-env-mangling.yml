@@ -62,6 +62,14 @@ jobs:
           MSYS_NO_PATHCONV: '1'
         run: python tests/experiment_env_roundtrip.py --verify --label "${{ matrix.os }}/bash+NO_PATHCONV"
 
+      # Scoped exclusion: name only the vars that carry credentials, so ordinary path
+      # conversion still works for everything else.
+      - name: Read back - bash + scoped ENV_CONV_EXCL
+        shell: bash
+        env:
+          MSYS2_ENV_CONV_EXCL: 'PROBE_LEAD_SLASH;PROBE_DOUBLE_SLASH'
+        run: python tests/experiment_env_roundtrip.py --verify --label "${{ matrix.os }}/bash+scoped_EXCL"
+
       - name: Read back - bash + MSYS2_PATH_TYPE=strict
         shell: bash
         env:
