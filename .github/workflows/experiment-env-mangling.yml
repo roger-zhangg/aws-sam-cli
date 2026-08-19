@@ -49,6 +49,25 @@ jobs:
         shell: pwsh
         run: python tests/experiment_env_roundtrip.py --verify --label "${{ matrix.os }}/pwsh"
 
+      # Candidate remedies for MSYS2 converting POSIX-looking env values at bash startup.
+      - name: Read back - bash + MSYS2_ENV_CONV_EXCL
+        shell: bash
+        env:
+          MSYS2_ENV_CONV_EXCL: '*'
+        run: python tests/experiment_env_roundtrip.py --verify --label "${{ matrix.os }}/bash+ENV_CONV_EXCL"
+
+      - name: Read back - bash + MSYS_NO_PATHCONV
+        shell: bash
+        env:
+          MSYS_NO_PATHCONV: '1'
+        run: python tests/experiment_env_roundtrip.py --verify --label "${{ matrix.os }}/bash+NO_PATHCONV"
+
+      - name: Read back - bash + MSYS2_PATH_TYPE=strict
+        shell: bash
+        env:
+          MSYS2_PATH_TYPE: strict
+        run: python tests/experiment_env_roundtrip.py --verify --label "${{ matrix.os }}/bash+PATH_TYPE_strict"
+
       - name: Read back - cmd
         if: runner.os == 'Windows'
         shell: cmd
