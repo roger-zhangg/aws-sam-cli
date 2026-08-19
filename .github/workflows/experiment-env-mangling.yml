@@ -1,0 +1,74 @@
+# EXPERIMENT (fork only -- do not merge upstream).
+#
+# Recurring Windows-only SignatureDoesNotMatch in tier1-windows-other is suspected to come
+# from AWS secret keys containing special characters (aws-actions/configure-aws-credentials
+# #528, #599; aws-cli #602). AWS documents it as "some operating system variants process the
+# string improperly" and both AWS investigations failed to reproduce it, so no mechanism is
+# known.
+#
+# This isolates the mechanism with synthetic 40-char secret-shaped values -- no OIDC, no real
+# credentials, no AWS calls. If a value changes between write and read, the env plumbing is
+# at fault and the failing case names the character. If values are intact but signatures
+# differ across platforms, the SDK is at fault instead.
+name: Experiment - env var mangling
+
+on:
+  workflow_dispatch:
+
+jobs:
+  roundtrip:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]  # ubuntu is the control
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install botocore (for the SigV4 probe)
+        shell: bash
+        run: python -m pip install --quiet botocore
+
+      # Written by Python exactly as real credentials are, under bash as CI does.
+      - name: Write probe values to GITHUB_ENV (python, bash)
+        shell: bash
+        run: python tests/experiment_env_roundtrip.py --write
+
+      - name: Read back - bash
+        shell: bash
+        run: python tests/experiment_env_roundtrip.py --verify --label "${{ matrix.os }}/bash"
+
+      - name: Read back - pwsh
+        shell: pwsh
+        run: python tests/experiment_env_roundtrip.py --verify --label "${{ matrix.os }}/pwsh"
+
+      - name: Read back - cmd
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: python tests/experiment_env_roundtrip.py --verify --label "windows/cmd"
+
+      # Same key, frozen timestamp: signatures must match across platforms.
+      - name: SigV4 determinism
+        shell: bash
+        run: python tests/experiment_env_roundtrip.py --sign --label "${{ matrix.os }}"
+
+      # Control: bypass GITHUB_ENV entirely. If these are intact but the GITHUB_ENV ones are
+      # not, the file round-trip is the culprit rather than the shell.
+      - name: Control - env set inline, no GITHUB_ENV
+        shell: bash
+        env:
+          PROBE_CTRL_ALNUM: abcdefghi0123456789ABCDEFGHIJKLMNOPQRSTU
+          PROBE_LEAD_SLASH: /bcdefghi0123456789ABCDEFGHIJKLMNOPQRSTU
+          PROBE_LEAD_PERCENT: '%bcdefghi0123456789ABCDEFGHIJKLMNOPQRSTU'
+          PROBE_CMD_VARLIKE: ab%PATH%i0123456789ABCDEFGHIJKLMNOPQRSTU
+        run: |
+          python - <<'PY'
+          import os
+          for k in ("PROBE_CTRL_ALNUM","PROBE_LEAD_SLASH","PROBE_LEAD_PERCENT","PROBE_CMD_VARLIKE"):
+              print(f"  {k:20s} {os.environ.get(k)!r}")
+          PY
