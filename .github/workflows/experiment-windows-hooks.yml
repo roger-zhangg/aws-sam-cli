@@ -1,0 +1,98 @@
+name: experiment-windows-hooks
+
+on:
+  push:
+    branches:
+      - experiment/windows-hooks
+  workflow_dispatch: {}
+
+jobs:
+  windows-installer-hooks:
+    runs-on: windows-latest
+    steps:
+      - name: Which sam is installed, and is it a bundle?
+        shell: pwsh
+        run: |
+          $sam = (Get-Command sam).Source
+          Write-Host "sam resolved to : $sam"
+          sam --version
+          Write-Host "--- install tree ---"
+          Get-ChildItem "C:\Program Files\Amazon\AWSSAMCLI" -Recurse -Depth 1 -ErrorAction SilentlyContinue |
+            Select-Object -First 15 -ExpandProperty FullName
+
+      - name: Is the Windows install a PyInstaller bundle or an embedded CPython?
+        shell: pwsh
+        run: |
+          Write-Host "--- exe/dll in runtime\ ---"
+          Get-ChildItem "C:\Program Files\Amazon\AWSSAMCLI\runtime" -Filter *.exe -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty Name
+          Write-Host "--- python.exe present? ---"
+          if (Test-Path "C:\Program Files\Amazon\AWSSAMCLI\runtime\python.exe") {
+            Write-Host "python.exe : PRESENT"
+            & "C:\Program Files\Amazon\AWSSAMCLI\runtime\python.exe" -c "import sys; print('version', sys.version.split()[0]); print('executable', sys.executable); print('frozen', hasattr(sys, '_MEIPASS'))"
+          } else {
+            Write-Host "python.exe : ABSENT"
+          }
+          Write-Host "--- _MEIPASS marker files (PyInstaller onedir) ---"
+          Get-ChildItem "C:\Program Files\Amazon\AWSSAMCLI" -Recurse -Filter "base_library.zip" -ErrorAction SilentlyContinue |
+            Select-Object -First 3 -ExpandProperty FullName
+          Write-Host "--- what sam.cmd actually runs ---"
+          Get-Content "C:\Program Files\Amazon\AWSSAMCLI\bin\sam.cmd"
+
+      - name: Mechanism probe -- what does sam do with a stray .py path?
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          New-Item -ItemType Directory -Force -Path C:\probe | Out-Null
+          Set-Content C:\probe\stray.py "print('hi')"
+          $out = (& sam C:\probe\stray.py 2>&1 | Out-String)
+          Write-Host "exit code   : $LASTEXITCODE"
+          Write-Host "line count  : $(($out -split '\r?\n').Count)"
+          if ($out -match 'Usage: sam \[OPTIONS\]') { Write-Host "help leaked : YES" } else { Write-Host "help leaked : NO" }
+          Write-Host "--- first 400 chars ---"
+          Write-Host $out.Substring(0, [Math]::Min(400, $out.Length))
+          $global:LASTEXITCODE = 0
+
+      - name: Build a --location template with a Python hook
+        shell: pwsh
+        run: |
+          $tpl = "C:\tpl"
+          New-Item -ItemType Directory -Force -Path "$tpl\{{cookiecutter.project_name}}" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$tpl\hooks" | Out-Null
+          Set-Content "$tpl\cookiecutter.json" '{"project_name": "hookdemo"}'
+          Set-Content "$tpl\{{cookiecutter.project_name}}\template.yaml" "Resources: {}"
+          $hook = @(
+            'import sys, pathlib',
+            'info = "executable=" + sys.executable + " | argv=" + repr(sys.argv) + " | version=" + sys.version.split()[0]',
+            'pathlib.Path("C:/HOOK_RAN").write_text(info)',
+            'print("hook said hello")'
+          )
+          Set-Content "$tpl\hooks\post_gen_project.py" $hook
+          Get-ChildItem -Recurse $tpl | Select-Object -ExpandProperty FullName
+
+      - name: sam init --location (no-interactive form)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          New-Item -ItemType Directory -Force -Path C:\out1 | Out-Null
+          $out = (& sam init --location C:\tpl --name hookdemo --no-interactive -o C:\out1 2>&1 | Out-String)
+          Write-Host "exit code : $LASTEXITCODE"
+          Write-Host $out
+          Write-Host "=== RESULT no-interactive ==="
+          if (Test-Path C:\HOOK_RAN) {
+            Write-Host "hook ran  : YES"
+            Get-Content C:\HOOK_RAN
+            Remove-Item C:\HOOK_RAN
+          } else {
+            Write-Host "hook ran  : NO"
+          }
+          Get-ChildItem -Recurse C:\out1 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
+
+      - name: sam init --location (piped newline form)
+        shell: cmd
+        continue-on-error: true
+        run: |
+          echo. | sam init --location C:\tpl -o C:\out2
+          echo exit code: %ERRORLEVEL%
+          if exist C:\HOOK_RAN (echo RESULT piped: hook ran = YES & type C:\HOOK_RAN) else (echo RESULT piped: hook ran = NO)
+          dir /s /b C:\out2
